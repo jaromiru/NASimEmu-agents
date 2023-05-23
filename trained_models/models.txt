@@ -1,0 +1,3 @@
+* wrk02-sm2md-inv-peq-mact
+	- model: inv_mact with positional encoding
+	- trained in: sm_entry_dmz_one_subnet, sm_entry_dmz_two_subnets (200 epochs)
