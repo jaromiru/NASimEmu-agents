@@ -1,6 +1,8 @@
 # NASimEmu-agents
 This is a repository containing deep RL agents for [NASimEmu](https://github.com/jaromiru/NASimEmu).
 
+Related [workshop paper](https://arxiv.org/abs/2305.17246), and dissertation (TBD).
+
 ## Usage
 Install [NASimEmu](https://github.com/jaromiru/NASimEmu) and run training as:
 ```
@@ -9,22 +11,39 @@ python main.py <path-to-scenario>
 
 Alternatively, you can test a trained model as an example below:
 ```
-# make sure to edit the code to use the NASimNetInvMAct model
-python main.py -load_model trained_models/wrk02-sm2md-inv-peq-mact.pt --trace ../NASimEmu/scenarios/sm_entry_dmz_three_subnets.v2.yaml
+mkdir out/
+python main.py -load_model trained_models/mlp.pt --trace ../NASimEmu-public/scenarios/uni.v2.yaml -device cpu -net_class NASimNetMLP -use_a_t -episode_step_limit 100 -augment_with_action
 ```
 
-## Choosing a model to train / test
-Currently, the MLP and invariant models are available. (Un)comment corresponding lines in `nasim_problem/nasim_config.py`. For example:
-```
-config.net_class = NASimNetMLP
-# config.net_class = NASimNetInvMAct
-```
 
 ## Experiments excerpt
-Below, you can see the results of the **md2sm** experiment. The MLP and invariant models were tested in their training scenarios and in novel, structurally different scenarios. More information in the [research article](https://arxiv.org/abs/2305.17246). 
-
+Generalization of invariant architectures vs. MLP:
 <div align=center>
-    <img src="docs/experiment-md2sm.svg" alt="md2sm experiment" width="100%" height="100%">
+    <img src="docs/exp-a.svg" width="100%" height="100%">
 </div>
 
+Training to stop:
+<div align=center>
+    <img src="docs/exp-b.svg" width="100%" height="100%">
+</div>
 
+Last action embedding:
+<div align=center>
+    <img src="docs/exp-c.svg" width="100%" height="100%">
+</div>
+
+Comparison of architecture variants:
+<div align=center>
+    <img src="docs/exp-e.svg" width="100%" height="100%">
+</div>
+
+Scaling experiment:
+```
+main.py huge-gen-rgoal-stoch -device cpu -cpus 2 -epoch 100 -max_epochs 200 --no_debug -net_class NASimNetInvMAct -force_continue_epochs 100 -use_a_t -episode_step_limit 200 -augment_with_action
+```
+<div align=center>
+    <img src="docs/exp-f.svg" width="100%" height="100%">
+</div>
+
+## Transfer to emulation
+Simulation-trained agents can be transferred to emulation, see the emulation [log](docs/emulation.txt).
