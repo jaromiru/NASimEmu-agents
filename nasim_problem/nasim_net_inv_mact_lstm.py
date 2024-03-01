@@ -18,14 +18,15 @@ from .net_utils import *
 
 import wandb
 
-class NASimNetInvMAct(Net):
+class NASimNetInvMActLSTM(Net):
 
     def __init__(self):
         super().__init__()
 
-        # self.embed_node = Sequential( Linear(config.node_dim - 1, config.emb_dim), LeakyReLU() )
         self.embed_node = Sequential( Linear(config.node_dim - 1 + config.pos_enc_dim, config.emb_dim), LeakyReLU() )
-        self.inner = Sequential( Linear(2 * config.emb_dim, config.emb_dim), LeakyReLU() )
+
+        self.gru = GRU(input_size=config.emb_dim * 2, hidden_size=config.emb_dim)
+        self.hidden = None
 
         self.action_select = Linear(2 * config.emb_dim, config.action_dim)  
         self.value_function = Linear(config.emb_dim, 1) 
@@ -83,7 +84,8 @@ class NASimNetInvMAct(Net):
 
         x = self.embed_node(x)
         x_agg = torch.cat([scatter(x, batch_ind, dim=0, reduce='mean'), scatter(x, batch_ind, dim=0, reduce='max')], dim=1)
-        x_agg = self.inner(x_agg)
+        x_agg, self.hidden = self.gru(x_agg.unsqueeze(0), self.hidden)
+        x_agg = x_agg.squeeze(0)
 
         # decode value
         value = self.value_function(x_agg)
@@ -148,8 +150,6 @@ class NASimNetInvMAct(Net):
         actions = list(zip(targets, env_actions))
         raw_actions = (action_selected.detach())
 
-        # print(f"{(a_id == 0).sum() / len(batch.x):.3f}") 
-
         return actions, value, tot_prob, raw_actions
 
     # def update(self, trace, target_net=None):
@@ -165,10 +165,10 @@ class NASimNetInvMAct(Net):
         r = np.vstack(r)
         d = np.vstack(d)
 
-        a = torch.cat(a)
+        # a = torch.cat(a)
 
-        if target_net is None:
-            target_net = self
+        # if target_net is None:
+        #     target_net = self
 
         # be carefull here: d_true will not work with PPO (as currently implemented)
         # the true next state is given only here as s_, but inside the sequence itself, we use 
@@ -179,14 +179,20 @@ class NASimNetInvMAct(Net):
 
         v_target = compute_v_target(r, v_, d, config.gamma, config.ppo_t, config.batch, config.use_a_t)
 
-        s = np.concatenate(s)
+        # print(d)
+        # print(r)
+        # print("q_", q_)
+        # print("q_target", q_target)
+        # exit()
+
+        # s = np.concatenate(s)
         v_target = v_target.flatten()
         a_cnt = torch.tensor(np.concatenate(a_cnt), dtype=torch.bool, device=self.device)
 
         # print(f"\nv={v_.mean():.2f}, v_t={v_target.mean():.2f} / q={q_.mean():.2f}, q_t={q_target.mean():.2f}")
         wandb.log(dict(v=v_.mean(), v_t=v_target.mean()), commit=False)
 
-        return ppo(s, a, a_cnt, d, v_target, self, config.gamma, config.alpha_v, self.alpha_h, config.ppo_k, config.ppo_eps, config.use_a_t, config.v_range)
+        return ppo(s, a, a_cnt, d, v_target, self, config.gamma, config.alpha_v, self.alpha_h, config.ppo_k, config.ppo_eps, config.use_a_t, config.v_range, lstm=True, hidden_s0=hidden_s0)
 
     def _update(self, loss):
         self.opt.zero_grad()
@@ -199,3 +205,22 @@ class NASimNetInvMAct(Net):
     # the net will be forced not to issue TerminalAction
     def set_force_continue(self, force):
         self.force_continue = force
+
+    def reset_state(self, batch_mask=None):
+        if self.hidden is not None:
+            if batch_mask is None:  # reset all
+                self.hidden = None
+
+            else:
+                # reset_idx = np.where(batch_mask)
+                zeros = torch.zeros_like(self.hidden, device=config.device)
+                condition = torch.zeros_like(self.hidden, dtype=torch.bool, device=config.device) # TODO: not optimal...
+                condition[0, batch_mask] = True
+                self.hidden = torch.where(condition, zeros, self.hidden) # reset the marked places
+
+    def clone_state(self, other):
+        if other.hidden is None:
+            self.hidden = None
+
+        else:
+            self.hidden = other.hidden.clone().detach()

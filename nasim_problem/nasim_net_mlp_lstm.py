@@ -17,15 +17,17 @@ from .net_utils import *
 
 import wandb
 
-class NASimNetMLP(Net):
+class NASimNetMLP_LSTM(Net):
 
     def __init__(self):
         super().__init__()
 
         self.MAX_ROWS = 50
 
-        self.mlp = Sequential( Linear(self.MAX_ROWS * (config.node_dim - 1), config.emb_dim), LeakyReLU(),
-                               Linear(config.emb_dim, config.emb_dim), LeakyReLU())
+        self.mlp = Sequential( Linear(self.MAX_ROWS * (config.node_dim - 1), config.emb_dim), LeakyReLU())
+
+        self.gru = GRU(input_size=config.emb_dim, hidden_size=config.emb_dim)
+        self.hidden = None
 
         self.action_select = Linear(config.emb_dim, self.MAX_ROWS * config.action_dim)  
         self.value_function = Linear(config.emb_dim, 1) 
@@ -70,6 +72,8 @@ class NASimNetMLP(Net):
 
         # process state
         x = self.mlp(batch)
+        x, self.hidden = self.gru(x.unsqueeze(0), self.hidden)
+        x = x.squeeze(0)
 
         # decode value
         value = self.value_function(x)
@@ -81,11 +85,7 @@ class NASimNetMLP(Net):
         def sample_action(x):
             out_action = self.action_select(x)
             out_action[action_mask] = -np.inf # apply action mask - disable actions for non-existent nodes
-
             action_softmax = torch.distributions.Categorical( torch.softmax(out_action, dim=1) )
-            # Note: there's a bug with pytorch 2.0.* -- it can sample 0. probability events, which breaks our code
-            # fix: use pytorch >= 2.1.*
-            # see https://github.com/pytorch/pytorch/issues/4858
 
             if force_action is not None:
                 action_selected = force_action
@@ -144,10 +144,10 @@ class NASimNetMLP(Net):
         r = np.vstack(r)
         d = np.vstack(d)
 
-        a = torch.cat(a)
+        # a = torch.cat(a)
 
-        if target_net is None:
-            target_net = self
+        # if target_net is None:
+        #     target_net = self
 
         # be carefull here: d_true will not work with PPO (as currently implemented)
         # the true next state is given only here as s_, but inside the sequence itself, we use 
@@ -164,7 +164,7 @@ class NASimNetMLP(Net):
         # print("q_target", q_target)
         # exit()
 
-        s = np.concatenate(s)
+        # s = np.concatenate(s)
         v_target = v_target.flatten()
         a_cnt = torch.tensor(np.concatenate(a_cnt), dtype=torch.bool, device=self.device)
 
@@ -172,7 +172,7 @@ class NASimNetMLP(Net):
         wandb.log(dict(v=v_.mean(), v_t=v_target.mean()), commit=False)
 
         # Todo: subnets should not be counted
-        return ppo(s, a, a_cnt, d, v_target, self, config.gamma, config.alpha_v, self.alpha_h, config.ppo_k, config.ppo_eps, config.use_a_t, config.v_range)
+        return ppo(s, a, a_cnt, d, v_target, self, config.gamma, config.alpha_v, self.alpha_h, config.ppo_k, config.ppo_eps, config.use_a_t, config.v_range, lstm=True, hidden_s0=hidden_s0)
 
     def _update(self, loss):
         self.opt.zero_grad()
@@ -185,3 +185,23 @@ class NASimNetMLP(Net):
     # the net will be forced not to issue TerminalAction
     def set_force_continue(self, force):
         self.force_continue = force
+
+
+    def reset_state(self, batch_mask=None):
+        if self.hidden is not None:
+            if batch_mask is None:  # reset all
+                self.hidden = None
+
+            else:
+                # reset_idx = np.where(batch_mask)
+                zeros = torch.zeros_like(self.hidden, device=config.device)
+                condition = torch.zeros_like(self.hidden, dtype=torch.bool, device=config.device) # TODO: not optimal...
+                condition[0, batch_mask] = True
+                self.hidden = torch.where(condition, zeros, self.hidden) # reset the marked places
+
+    def clone_state(self, other):
+        if other.hidden is None:
+            self.hidden = None
+
+        else:
+            self.hidden = other.hidden.clone().detach()

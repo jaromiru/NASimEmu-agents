@@ -1,3 +1,4 @@
-* wrk02-sm2md-inv-peq-mact
-	- model: inv_mact with positional encoding
-	- trained in: sm_entry_dmz_one_subnet, sm_entry_dmz_two_subnets (200 epochs)
+mlp: main.py ../NASimEmu-public/scenarios/uni.v2.yaml --test_scenario ../NASimEmu-public/scenarios/corp.v2.yaml -device cpu -cpus 2 -epoch 100 -max_epochs 200 --no_debug -net_class NASimNetMLP -force_continue_epochs 50 -use_a_t -episode_step_limit 100 -augment_with_action
+inv-mact: main.py ../NASimEmu-public/scenarios/uni.v2.yaml --test_scenario ../NASimEmu-public/scenarios/corp.v2.yaml -device cpu -cpus 2 -epoch 100 -max_epochs 200 --no_debug -net_class NASimNetInvMAct -force_continue_epochs 50 -use_a_t -episode_step_limit 100 -augment_with_action
+att-mact: main.py ../NASimEmu-public/scenarios/uni.v2.yaml --test_scenario ../NASimEmu-public/scenarios/corp.v2.yaml -device cpu -cpus 2 -epoch 100 -max_epochs 200 --no_debug -net_class NASimNetXAttMAct -force_continue_epochs 50 -use_a_t -episode_step_limit 100 -augment_with_action
+gnn-mact: main.py ../NASimEmu-public/scenarios/uni.v2.yaml --test_scenario ../NASimEmu-public/scenarios/corp.v2.yaml -device cpu -cpus 2 -epoch 100 -max_epochs 200 --no_debug -net_class NASimNetGNN_MAct -force_continue_epochs 50 -use_a_t -episode_step_limit 100 -observation_format graph_v2 -mp_iterations 2 -augment_with_action

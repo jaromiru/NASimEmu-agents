@@ -18,10 +18,12 @@ from .net_utils import *
 
 import wandb
 
-class NASimNetInvMAct(Net):
+class NASimNetInvMActTrainAT(Net):
 
     def __init__(self):
         super().__init__()
+
+        assert not config.use_a_t, 'This class requires `config.use_a_t == False`.'
 
         # self.embed_node = Sequential( Linear(config.node_dim - 1, config.emb_dim), LeakyReLU() )
         self.embed_node = Sequential( Linear(config.node_dim - 1 + config.pos_enc_dim, config.emb_dim), LeakyReLU() )
@@ -29,6 +31,7 @@ class NASimNetInvMAct(Net):
 
         self.action_select = Linear(2 * config.emb_dim, config.action_dim)  
         self.value_function = Linear(config.emb_dim, 1) 
+        self.a_t = Sequential(Linear(config.emb_dim, 1), Sigmoid())
 
         self.opt = torch.optim.AdamW(self.parameters(), lr=config.opt_lr, weight_decay=config.opt_l2)
         # self.opt = torch.optim.RAdam(self.parameters(), lr=config.opt_lr, weight_decay=config.opt_l2)
@@ -125,6 +128,7 @@ class NASimNetInvMAct(Net):
 
         #     return node_softmax, action_softmax, value, q_val
 
+
         # select an action & node
         # n_prob, n_index, node_selected = sample_node(x, batch)
         a_prob, a_index, action_selected = sample_action(x)
@@ -140,15 +144,18 @@ class NASimNetInvMAct(Net):
         env_actions = a_id
 
         if not self.force_continue:
-            terminate = (value.detach() <= 0.).view(-1, 1)
+            # compute a_t prob
+            a_t_prob = self.a_t(x_agg)
+            terminate = torch.bernoulli(a_t_prob.detach()).bool()
+            # terminate = (value.detach() <= 0.).view(-1, 1)
             env_actions[terminate.flatten().cpu().numpy()] = -1
-            tot_prob[terminate] = .5 # don't update probabilities when terminated (also, don't put 0. there, when it goes through torch.log, it throws nan errors)
+
+            tot_prob[terminate] = a_t_prob[terminate]
+            tot_prob[~terminate] *= 1. - a_t_prob[~terminate]
 
         # targets = node_index[n_index.cpu()].reshape(-1, 2)
         actions = list(zip(targets, env_actions))
         raw_actions = (action_selected.detach())
-
-        # print(f"{(a_id == 0).sum() / len(batch.x):.3f}") 
 
         return actions, value, tot_prob, raw_actions
 

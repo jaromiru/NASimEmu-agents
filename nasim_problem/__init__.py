@@ -29,7 +29,8 @@ class NASimRRL():
 			id='NASimEmuEnv-v99',
 			entry_point='nasimemu.env:NASimEmuEnv',
 			kwargs={'scenario_name': config.scenario_name, 'step_limit': config.step_limit, 
-				'fully_obs': config.fully_obs, 'observation_format': config.observation_format, 'random_init': True}
+				'fully_obs': config.fully_obs, 'observation_format': config.observation_format,
+				'augment_with_action': config.augment_with_action, 'random_init': True, 'verbose': False}
 		)
 
 	@staticmethod

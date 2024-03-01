@@ -89,6 +89,137 @@ class MultiMessagePassingWithGlobalNode(Module):
         return x, x_global
 
 # ----------------------------------------------------------------------------------------
+class MultiMessagePassingWithGlobalNodeAndLastGRUGlobal(Module): # GRU in the global node
+    def __init__(self, steps):
+        super().__init__()
+
+        self.gnns = ModuleList( [GraphNet() for i in range(steps)] )
+        self.pools = ModuleList( [GlobalNode() for i in range(steps)] )            
+        # self.layer_norm = ModuleList( [LayerNorm(config.emb_dim) for i in range(steps)] )
+
+        self.gru = GRU(input_size=config.emb_dim, hidden_size=config.emb_dim)
+        self.hidden = None
+
+        self.steps = steps
+
+    def forward(self, x, xg_init, edge_attr, edge_index, batch_ind, num_graphs, data_lens):
+        if xg_init is None:
+            x_global = torch.zeros(num_graphs, config.emb_dim, device=config.device)
+        else:
+            x_global = x_init
+
+        # optionally initialize the hidden state
+        if self.hidden is None:
+            self.hidden = torch.zeros((1, num_graphs, config.emb_dim), device=config.device)
+
+        for i in range(self.steps):
+            x = self.gnns[i](x, edge_attr, edge_index, x_global, batch_ind)            
+            # x = self.layer_norm[i](x)
+
+            x_global = self.pools[i](x_global, x, batch_ind)
+
+            if i == self.steps - 2: # pre-last
+                x_global, self.hidden = self.gru(x_global.unsqueeze(0), self.hidden)
+                x_global = x_global.squeeze(0)
+
+        return x, x_global
+
+    def reset_state(self, batch_mask):
+        if self.hidden is not None:
+            if batch_mask is None:  # reset all
+                self.hidden = None
+
+            else:
+                # reset_idx = np.where(batch_mask)
+                zeros = torch.zeros_like(self.hidden, device=config.device)
+                condition = torch.zeros_like(self.hidden, dtype=torch.bool, device=config.device) # TODO: not optimal...
+                condition[0, batch_mask] = True
+                self.hidden = torch.where(condition, zeros, self.hidden) # reset the marked places
+
+    # def detach_state(self):
+    #     if self.hidden is not None:
+    #         self.hidden = self.hidden.detach()
+
+    def clone_state(self, other):
+        if other.hidden is None:
+            self.hidden = None
+
+        else:
+            self.hidden = other.hidden.clone().detach()
+
+# ----------------------------------------------------------------------------------------
+class MultiMessagePassingWithGlobalNodeAndAllGRUGlobal(Module): # GRU in the global node
+    def __init__(self, steps):
+        super().__init__()
+
+        self.gnns = ModuleList( [GraphNet() for i in range(steps)] )
+        self.pools = ModuleList( [GlobalNode() for i in range(steps)] )            
+        # self.layer_norm = ModuleList( [LayerNorm(config.emb_dim) for i in range(steps)] )
+
+        self.grus = ModuleList( [GRU(input_size=config.emb_dim, hidden_size=config.emb_dim) for i in range(steps)] )            
+        self.hiddens = [None for i in range(steps)]
+        
+        # self.gru = GRU(input_size=config.emb_dim, hidden_size=config.emb_dim)
+        # self.hidden = None
+
+        self.steps = steps
+
+    def forward(self, x, xg_init, edge_attr, edge_index, batch_ind, num_graphs, data_lens):
+        if xg_init is None:
+            x_global = torch.zeros(num_graphs, config.emb_dim, device=config.device)
+        else:
+            x_global = x_init
+
+        # optionally initialize the hidden state
+        if self.hiddens[0] is None:
+            for i in range(self.steps):
+                self.hiddens[i] = torch.zeros((1, num_graphs, config.emb_dim), device=config.device)
+
+        for i in range(self.steps):
+            x = self.gnns[i](x, edge_attr, edge_index, x_global, batch_ind)            
+            # x = self.layer_norm[i](x)
+
+            x_global = self.pools[i](x_global, x, batch_ind)
+
+            x_global, self.hiddens[i] = self.grus[i](x_global.unsqueeze(0), self.hiddens[i])
+            x_global = x_global.squeeze(0)
+
+
+            # if i == self.steps - 2: # pre-last
+            # if i == 0: # first
+                # x_global, self.hidden = self.gru(x_global.unsqueeze(0), self.hidden)
+                # x_global = x_global.squeeze(0)
+
+        return x, x_global
+
+    def reset_state(self, batch_mask):
+        if self.hiddens[0] is not None:
+            if batch_mask is None:  # reset all
+                for i in range(self.steps):
+                    self.hiddens[i] = None
+
+            else:
+                for i in range(self.steps):
+                    # reset_idx = np.where(batch_mask)
+                    zeros = torch.zeros_like(self.hiddens[i], device=config.device)
+                    condition = torch.zeros_like(self.hiddens[i], dtype=torch.bool, device=config.device) # TODO: not optimal...
+                    condition[0, batch_mask] = True
+                    self.hiddens[i] = torch.where(condition, zeros, self.hiddens[i]) # reset the marked places
+
+    # def detach_state(self):
+    #     if self.hidden is not None:
+    #         self.hidden = self.hidden.detach()
+
+    def clone_state(self, other):
+        if other.hiddens[0] is None:
+            for i in range(self.steps):
+                self.hiddens[i] = None
+
+        else:
+            for i in range(self.steps):
+                self.hiddens[i] = other.hiddens[i].clone().detach()
+
+# ----------------------------------------------------------------------------------------
 class GlobalNode(Module):       
     def __init__(self):
         super().__init__()

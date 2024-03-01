@@ -7,7 +7,6 @@ from numba import jit
 
 from torch.nn import *
 from torch_geometric.data import Data, Batch
-from torch_scatter import scatter
 
 from rl import a2c, ppo
 from config import config
@@ -18,17 +17,21 @@ from .net_utils import *
 
 import wandb
 
-class NASimNetInvMAct(Net):
-
+class NASimNetGNN_MAct(Net):
     def __init__(self):
         super().__init__()
 
-        # self.embed_node = Sequential( Linear(config.node_dim - 1, config.emb_dim), LeakyReLU() )
-        self.embed_node = Sequential( Linear(config.node_dim - 1 + config.pos_enc_dim, config.emb_dim), LeakyReLU() )
-        self.inner = Sequential( Linear(2 * config.emb_dim, config.emb_dim), LeakyReLU() )
+        self.embed_node = Sequential( Linear(config.node_dim + config.pos_enc_dim, config.emb_dim), LeakyReLU() )
+        self.gnn = MultiMessagePassingWithGlobalNode(config.mp_iterations)
 
-        self.action_select = Linear(2 * config.emb_dim, config.action_dim)  
-        self.value_function = Linear(config.emb_dim, 1) 
+        # self.node_select = Sequential(Linear(config.emb_dim, config.emb_dim), LeakyReLU(), Linear(config.emb_dim, 5)) # node features -> node probability for all 5 actions
+        # self.action_select = Sequential(Linear(config.emb_dim * 2, config.emb_dim), LeakyReLU(), Linear(config.emb_dim, 5))  # global features -> 5 actions
+        # self.value_function = Sequential(Linear(config.emb_dim * 2, config.emb_dim), LeakyReLU(), Linear(config.emb_dim, 1)) # global features -> state value
+
+        # self.node_select = Linear(config.emb_dim, 1) # node features -> node probability
+        self.action_select = Linear(config.emb_dim, config.action_dim)  # node features -> actions
+
+        self.value_function = Linear(config.emb_dim, 1) # global features -> state value
 
         self.opt = torch.optim.AdamW(self.parameters(), lr=config.opt_lr, weight_decay=config.opt_l2)
         # self.opt = torch.optim.RAdam(self.parameters(), lr=config.opt_lr, weight_decay=config.opt_l2)
@@ -36,42 +39,25 @@ class NASimNetInvMAct(Net):
 
         self.force_continue = False
 
-    def prepare_batch(self, s_batch):
-        node_feats = [torch.tensor(x, dtype=torch.float32, device=config.device) for x in s_batch]
+    @staticmethod
+    def prepare_batch(s_batch):
+        node_feats, edge_index, node_index, pos_index = zip(*s_batch)
+
+        node_feats = [torch.tensor(x, dtype=torch.float32, device=config.device) for x in node_feats]
         # edge_attr  = [torch.tensor(x, dtype=torch.float32, device=config.device) for x in edge_attr]
-        # edge_index = [torch.tensor(x, dtype=torch.int64, device=config.device) for x in edge_index]
+        edge_index = [torch.tensor(x, dtype=torch.int64, device=config.device) for x in edge_index]
 
         # create batch
-        data = [Data(x=node_feats[i][:-1]) for i in range( len(s_batch) )] # [:-1] = skip the last row which is for action result
-
+        data = [Data(x=node_feats[i], edge_index=edge_index[i]) for i in range( len(s_batch) )]
         data_lens = [x.num_nodes for x in data]
         batch = Batch.from_data_list(data)
-        batch_ind = batch.batch.to(self.device) # graph indices in the batch
+        batch_ind = batch.batch.to(config.device) # graph indices in the batch
 
-        node_index = np.array([HostVector(x.cpu().numpy()).address for x in batch.x])
-        pos_index = torch.cat([torch.arange(start=1, end=dl+1) for dl in data_lens]).to(self.device)
+        #TODO node index requires concat
+        node_index = np.concatenate(node_index)
+        pos_index = torch.tensor(np.concatenate(pos_index)).to(config.device)
 
         return data, data_lens, batch, batch_ind, node_index, pos_index
-
-    # def prepare_batch(self,s_batch):
-    #     batch = []
-    #     batch_ind = []
-    #     node_index = []
-    #     action_mask = []
-
-    #     for bid, s in enumerate(s_batch):
-    #         s = s[:-1] # remove result
-    #         node_index.append([HostVector(x).address for x in s]) # create node_index
-    #         batch.append(s)
-
-    #     node_index = np.array(node_index)
-    #     action_mask = np.array(action_mask)
-    #     action_mask = torch.tensor(action_mask, dtype=torch.bool, device=self.device)
-
-    #     batch = np.array(batch)
-    #     batch = torch.tensor(batch, dtype=torch.float32, device=config.device)
-
-    #     return batch, node_index, action_mask
 
     def forward(self, s_batch, only_v=False, complete=False, force_action=None):
         data, data_lens, batch, batch_ind, node_index, pos_index = self.prepare_batch(s_batch)
@@ -82,21 +68,21 @@ class NASimNetInvMAct(Net):
         x = torch.cat([x, pos_enc], dim=1)    # add positional encoding
 
         x = self.embed_node(x)
-        x_agg = torch.cat([scatter(x, batch_ind, dim=0, reduce='mean'), scatter(x, batch_ind, dim=0, reduce='max')], dim=1)
-        x_agg = self.inner(x_agg)
+        xg_init = None # TODO
+        x, x_pooled = self.gnn(x, xg_init, batch.edge_attr, batch.edge_index, batch_ind, batch.num_graphs, data_lens)
 
         # decode value
-        value = self.value_function(x_agg)
+        value = self.value_function(x_pooled)
 
         if only_v:
             return value
 
-        x_agg_expanded = x_agg[batch_ind]
-        x = torch.cat([x, x_agg_expanded], dim=1)
-        # x = self.embed_out(x)
-
         def sample_action(x):
             out_action = self.action_select(x)
+
+            subnet_nodes = batch.x[:, 0] == 1
+            out_action[subnet_nodes] = -np.inf # subnet nodes cannot be selected
+
             action_softmax = torch_geometric.utils.softmax(out_action.flatten(), torch.repeat_interleave(batch_ind, config.action_dim))
 
             data_lens_a = (np.array(data_lens) * config.action_dim).tolist()
@@ -117,6 +103,8 @@ class NASimNetInvMAct(Net):
         # if complete:
         #     # node probs
         #     node_activation = self.node_select(x)
+        #     subnet_nodes = batch.x[:, 0] == 1
+        #     node_activation[subnet_nodes] = -np.inf # subnet nodes cannot be selected
         #     node_softmax = torch_geometric.utils.softmax(node_activation.flatten(), batch_ind)
 
         #     # action probs
@@ -126,14 +114,15 @@ class NASimNetInvMAct(Net):
         #     return node_softmax, action_softmax, value, q_val
 
         # select an action & node
-        # n_prob, n_index, node_selected = sample_node(x, batch)
         a_prob, a_index, action_selected = sample_action(x)
 
         a_id = (action_selected % config.action_dim).clone().cpu().numpy()
-        n_id = (action_selected // config.action_dim).clone().cpu().numpy()
+        # n_id = (action_selected // config.action_dim).clone().cpu().numpy() # node index within one graph in the batch
+        # targets = np.array([HostVector(data[bid].x[n_id[bid], 1:]).address for bid in range(len(s_batch))]).reshape(-1, 2) # 1: because the first index is subnet/host type (added in env_utils.convert_to_graph())
 
-        targets = np.array([HostVector(s_batch[bid][n_id[bid]]).address for bid in range(len(s_batch))]).reshape(-1, 2)
-        # targets = node_index[np.arange(len(node_index)), n_id].reshape(-1, 2) 
+        n_index = a_index.cpu().numpy() // config.action_dim # global node index for the whole batch
+        targets = node_index[n_index].reshape(-1, 2)                  # ^^ ought to be the same
+        # assert np.all(targets_2 == targets)
 
         # total probability of the action is the product of probabilites of selecting a node and a particular action on this node
         tot_prob = a_prob # * n_prob
@@ -147,8 +136,6 @@ class NASimNetInvMAct(Net):
         # targets = node_index[n_index.cpu()].reshape(-1, 2)
         actions = list(zip(targets, env_actions))
         raw_actions = (action_selected.detach())
-
-        # print(f"{(a_id == 0).sum() / len(batch.x):.3f}") 
 
         return actions, value, tot_prob, raw_actions
 
@@ -175,9 +162,15 @@ class NASimNetInvMAct(Net):
         # plain next state - this is OK if all d_true == d, but wrong otherwise
 
         v_ = target_net(s_[-1], only_v=True)
-        v_ = v_.detach().flatten()
+        v_ = v_.detach().flatten()    
 
         v_target = compute_v_target(r, v_, d, config.gamma, config.ppo_t, config.batch, config.use_a_t)
+
+        # print(d)
+        # print(r)
+        # print("q_", q_)
+        # print("q_target", q_target)
+        # exit()
 
         s = np.concatenate(s)
         v_target = v_target.flatten()

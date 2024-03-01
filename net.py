@@ -39,3 +39,8 @@ class Net(Module):
     def get_param_count(self):
         return sum(p.numel() for p in self.parameters())
 
+    def reset_state(self, batch_mask=None):
+        pass
+
+    def clone_state(self, other):
+        pass

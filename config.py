@@ -19,7 +19,6 @@ def get_device(device):
 	else:
 		return device
 
-
 class Object:
 	def init(self, args):
 		self.gamma = 0.99
@@ -32,12 +31,11 @@ class Object:
 		self.ppo_eps = 0.2
 
 		self.alpha_v = 0.1 / self.ppo_k
-		self.alpha_q = 0.1 / self.ppo_k
 		self.alpha_h = args.alpha_h
 
-		self.force_continue_steps = 20 * self.epoch
+		self.force_continue_steps = args.force_continue_epochs * self.epoch
 
-		self.target_rho = 0.01
+		self.target_rho = 0.1
 		self.emb_dim = args.emb_dim
 		self.mp_iterations = args.mp_iterations
 
@@ -47,14 +45,14 @@ class Object:
 
 		self.opt_lr = args.lr
 		self.opt_l2 = 1.0e-4
-		self.opt_max_norm = 0.1
+		self.opt_max_norm = args.max_norm
 
 		self.sched_lr_factor = 0.5
 		self.sched_lr_min    = self.opt_lr / 30
 		self.sched_lr_rate   = 25 * self.epoch
 		
 		self.sched_alpha_h_factor = 1.0
-		self.sched_alpha_h_min    = self.alpha_h / 10
+		self.sched_alpha_h_min    = self.alpha_h / 100.
 		self.sched_alpha_h_rate   = 10 * self.epoch
 
 		self.v_range = None #(-np.inf, np.inf)	# range of the value function to help the optimization, can be None
@@ -65,6 +63,8 @@ class Object:
 		self.eval_batch = 64
 
 		self.load_model = args.load_model
+
+		self.slurm_job_id = os.environ.get('SLURM_JOB_ID')
 
 	def __str__(self):
 		return str( vars(self) )

@@ -1,6 +1,7 @@
 from vec_env.subproc_vec_env import SubprocVecEnv
 from tqdm import tqdm
 import gym, numpy as np, torch
+import itertools
 
 from config import config
 
@@ -8,7 +9,7 @@ from nasimemu.nasim.envs.action import Exploit, PrivilegeEscalation, ServiceScan
 from nasimemu.nasim.envs.host_vector import HostVector
 from nasimemu.env_utils import convert_to_graph, plot_network
 
-import plotly.io as pio   
+import plotly.io as pio  
 
 ACTION_MAP = {
     ServiceScan: 'ServScan',
@@ -20,6 +21,67 @@ ACTION_MAP = {
 }
 
 class NASimDebug():
+    def calc_baseline(self):
+        # calculate the mean success try for probability p
+        def get_expected_success(p, l=100):
+            assert p >= 0.1, 'Computation not precise for p < 0.1; increase l'
+
+            n_0 = np.arange(l)
+            n_1 = n_0 + 1
+
+            p_not = np.full(l, 1-p) ** n_0
+            p_mul = p_not * p
+
+            p_mean = np.sum( p_mul * n_1 )
+            return p_mean
+
+        test_env = gym.make('NASimEmuEnv-v99', random_init=False)
+        env_raw = test_env.env
+        test_env.reset()
+
+        # useful constants
+        p_e = np.mean([e_data['prob'] for e_name, e_data in env_raw.exploit_list])
+        p_pe = np.mean([pe_data['prob'] for pe_name, pe_data in env_raw.privesc_list])
+
+        exp_e = get_expected_success(p_e) # we assume exploit success probability = 0.8
+        exp_pe = get_expected_success(p_pe) # 
+
+        # stats
+        req_actions_list = []
+        reward_list = []
+
+        reward_per_action = -0.1
+        reward_per_sensitive_host = 10.
+
+        sensitive_hosts = 0
+
+        # need to iterate and average, because there is randomness in the generated scenario
+        for i in range(config.eval_problems):
+            s = test_env.reset()
+            network = env_raw.env.network
+
+            req_actions = ( len(network.hosts) +                          # service scan each host
+                            exp_e * len(network.hosts) +                  # exploit each host   
+                            exp_pe * len(network.get_sensitive_hosts()) + # privesc each sensitive host
+                            len(network.subnets) )                        # scan in each of the subnets once to discover whole network
+
+            if len(env_raw.env.scenario.privescs) > 1:            # only if there are multiple privescs
+                req_actions += len(network.get_sensitive_hosts()) # process scan for each sensitive host
+
+            reward = reward_per_action * req_actions + \
+                     reward_per_sensitive_host * len(network.get_sensitive_hosts())
+
+            sensitive_hosts += len(network.get_sensitive_hosts())
+
+            req_actions_list.append(req_actions)
+            reward_list.append(reward)
+
+        req_actions_mean = np.mean(req_actions_list)
+        reward_mean = np.mean(reward_list)
+
+        print(f"This scenario contains {sensitive_hosts / config.eval_problems} sensitive hosts on average.")
+        print(f"{test_env.env.scenario_name};{reward_mean:.2f};{req_actions_mean:.2f}")
+
     def evaluate(self, net):
         log_trn = self._eval(net, config.scenario_name)
 
@@ -32,45 +94,77 @@ class NASimDebug():
 
     def _eval(self, net, scenario_name):
         test_env = SubprocVecEnv([lambda: gym.make('NASimEmuEnv-v99', random_init=False, scenario_name=scenario_name) for i in range(config.eval_batch)], in_series=(config.eval_batch // config.cpus), context='fork')
-        tqdm_val = tqdm(desc='Validating', total=config.eval_problems, unit=' problems')
+        tqdm_val = tqdm(desc='Validating', unit=' problems')
 
+        saved_state = net.__class__() # create a fresh instance
+        saved_state.clone_state(net)
+        
         with torch.no_grad():
             net.eval()
+            net.reset_state()
 
             r_tot = 0.
+            r_episodes = 0.
             problems_solved = 0
             problems_finished = 0
             episode_lengths = 0
+            captured = 0
             steps = 0
+            terminated = np.zeros(config.eval_batch, dtype=bool)
 
             s = test_env.reset()
 
-            while problems_finished < config.eval_problems:
-                steps += 1
+            while True:
+                steps += np.sum(~terminated)
 
-                a, v, q, pi, _ = net(s)
-                s, r, d, i = test_env.step(a)
+                a, v, pi, _ = net(s)
+                a = np.array(a, dtype=object)
+
+                s, r_, d_, i_ = test_env.step(a)
+                net.reset_state(d_)
+
+                r = r_[~terminated]
+                d = d_[~terminated]
+                i = list(itertools.compress(i_, ~terminated))
 
                 # print(r)
                 r_tot += np.sum(r)
+                r_episodes += sum(x['r_tot'] for x in i if x['done'] == True)
+
                 problems_solved   += sum('d_true' in x and x['d_true'] == True for x in i)
                 problems_finished += np.sum(d)
+                
                 episode_lengths += sum(x['step_idx'] for x in i if x['done'] == True)
+                captured += sum(x['captured'] for x in i if x['done'] == True)
+
                 tqdm_val.update(np.sum(d))
 
-            r_avg = r_tot / (steps * config.eval_batch) # average reward per step
-            problems_solved_ps  = problems_solved / (steps * config.eval_batch)
+                if problems_finished >= config.eval_problems:
+                    terminated |= d_
+                    if np.all(terminated):
+                        break
+
+            r_avg = r_tot / steps # average reward per step <- obsolete! this is a wrong metric to track in case there are differences in episode lengths
+            r_avg_episodes = r_episodes / problems_finished
+
+            problems_solved_ps  = problems_solved / steps
             problems_solved_avg = problems_solved / problems_finished
+
             episode_lengths_avg = episode_lengths / problems_finished
+            captured_avg = captured / problems_finished
 
             net.train()
+
+        net.clone_state(saved_state)
 
         tqdm_val.close()
         test_env.close()
 
         log = {
             'reward_avg': r_avg,
-            'eplen_avg': episode_lengths_avg
+            'reward_avg_episodes': r_avg_episodes,
+            'eplen_avg': episode_lengths_avg,
+            'captured_avg': captured_avg
             # 'solved_per_step': problems_solved_ps,
             # 'solved_avg': problems_solved_avg,
         }
@@ -80,11 +174,17 @@ class NASimDebug():
     def debug(self, net, show=False):
         test_env = gym.make('NASimEmuEnv-v99', random_init=False)
         s = test_env.reset()
-
+        
+        saved_state = net.__class__() # create a fresh instance
+        saved_state.clone_state(net)
+        
         with torch.no_grad():
             net.eval()
+            net.reset_state()
             node_softmax, action_softmax, value, q_val = net([s], complete=True)
             net.train()
+
+        net.clone_state(saved_state)
 
         G = self._make_graph(s, node_softmax, action_softmax)
         fig = self._plot(G, value.item(), q_val.item(), test_env)
@@ -104,7 +204,11 @@ class NASimDebug():
         with torch.no_grad():
             test_env = gym.make('NASimEmuEnv-v99', verbose=False, random_init=False, emulate=config.emulate)
             s = test_env.reset()
+            i = {'subnet_graph': test_env.subnet_graph.copy()}
+
             # self._plot_network(test_env, net, s)
+
+            net.reset_state()
 
             if not config.emulate:
                 print("Note: This is simulation state - it is not observed.")
@@ -112,34 +216,43 @@ class NASimDebug():
             else:
                 print("Note: Emulation - true state unknown.")
 
-
-            test_env.env.env.render(obs=s)
+            test_env.env.env.render(obs=test_env.s_raw)
             # input()
         
             pio.kaleido.scope.mathjax = None
 
-            for step in range(1, 15):
+            for step in range(1, 200):
                 print(f"\nSTEP {step}")
-                a, v, q, pi, _ = net([s])
-                s_orig = s
+                a, v, pi, _ = net([s])
+                # a = np.array(a, dtype=object) # todo: test when error occurs
+
+                s_raw_orig = test_env.s_raw
+                orig_subnet_graph = i['subnet_graph'].copy()
+
                 s, r, d, i = test_env.step(a[0])
+                net.reset_state([d])
 
                 print()
                 print(f"a: {i['a_raw']}, r: {r}, d: {d}")
                 # print(f"V(s)={v.item():.2f}, Q(s, a_cnt)={q.item():.2f}")
-                print(f"V(s)={v.item():.2f}")
+                if v is not None:
+                    print(f"V(s)={v.item():.2f}")
 
-                fig = plot_network(test_env, s_orig, i['a_raw'])
-                fig.show()
-                # fig.write_image(f"out/trace-{step}.pdf", width=1200, height=600, scale=1.0)
+                fig = plot_network(s_raw_orig, orig_subnet_graph, i['a_raw'])
+                # fig.show()
+
+                fig.update_xaxes(range=[-1.35, 1.3])
+                fig.update_yaxes(range=[-1.2, 1.3])
+                fig.write_image(f"out/trace-{step}.pdf", width=1200, height=600, scale=1.0)
 
                 if i['success']:
                     test_env.env.env.render(obs=i['s_raw'])
 
-                    if d:
-                        print("-------------FINISHED----------------")
+                if d:
+                    print("-------------FINISHED----------------")
+                    exit()
 
-                    input()
+                    # input()
 
     # # taken from https://plotly.com/python/network-graphs/
     # def _plot(self, G, value, q_val, env):

@@ -7,8 +7,8 @@ from .vec_env import VecEnv, CloudpickleWrapper, clear_mpi_env_vars
 def worker(remote, parent_remote, env_fn_wrappers):
     def step_env(env, action):
         ob, reward, done, info = env.step(action)
-        if done:
-            ob = env.reset()
+        # if done:
+        #     ob = env.reset()
         return ob, reward, done, info
 
     parent_remote.close()
