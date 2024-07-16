@@ -1,7 +1,7 @@
 # NASimEmu-agents
 This is a repository containing deep RL agents for [NASimEmu](https://github.com/jaromiru/NASimEmu).
 
-Related [workshop paper](https://arxiv.org/abs/2305.17246), and dissertation (TBD).
+Related [workshop paper](https://arxiv.org/abs/2305.17246), and [dissertation (chapter 6)](https://dspace.cvut.cz/handle/10467/114377).
 
 ## Usage
 Install [NASimEmu](https://github.com/jaromiru/NASimEmu) and run training as:
